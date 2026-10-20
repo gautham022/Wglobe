@@ -1,0 +1,1 @@
+export const API_URL = "https://weather-api-project-production-60b8.up.railway.app";

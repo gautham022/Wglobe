@@ -1,0 +1,705 @@
+import { useEffect, useRef, useState } from 'react'
+import * as THREE from 'three'
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { ShootingStars } from '@/components/ui/shooting-stars'
+import earthTexture from './textures/earth.jpg'
+import WeatherRadarView from './WeatherRadarView'
+import Footer from './components/ui/Footer'
+import WeatherForecastPanel from './WeatherForecastPanel'
+import WeatherExtrasPanel from './WeatherExtrasPanel'
+import './App.css'
+import PlacesPanel from './PlacesPanel'
+import SidePanels from './SidePanels'
+import globeLabels from './globeLabels'
+import AIChatBox from './AIChatBox'
+import { API_URL } from './config';
+import LoginPage from './components/ui/LoginPage';
+
+function latLonToVector3(lat, lon, radius) {
+  const phi = (90 - lat) * (Math.PI / 180)
+  const theta = (lon + 180) * (Math.PI / 180)
+  const x = -radius * Math.sin(phi) * Math.cos(theta)
+  const y = radius * Math.cos(phi)
+  const z = radius * Math.sin(phi) * Math.sin(theta)
+  return new THREE.Vector3(x, y, z)
+}
+
+function formatCityDateTime(timezoneOffsetSeconds) {
+  if (timezoneOffsetSeconds == null) return ''
+  const cityMs = Date.now() + timezoneOffsetSeconds * 1000
+  const cityDate = new Date(cityMs)
+  const date = cityDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
+  const time = cityDate.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })
+  return `${date} · ${time}`
+}
+
+const funnyMessages = [
+  "Hmm, that city seems to be hiding from satellites.",
+  "404: City ghosted us.",
+  "That place doesn't exist... or you typo'd. No judgment.",
+  "Even Google Maps is confused right now.",
+  "Our weather balloons came back empty-handed.",
+  "We searched Earth. No luck.",
+  "That city is playing hide and seek.",
+  "The clouds have never heard of that place.",
+  "Weather report unavailable from the imaginary dimension.",
+  "The pigeons delivering weather data got lost.",
+  "Nice try... but we couldn't find that city.",
+  "Our radar just shrugged.",
+  "This city must be using stealth mode.",
+  "The weather gods are scratching their heads.",
+  "No weather today... because there's no city.",
+  "Oops! That location escaped our database.",
+  "Even Sherlock Holmes couldn't find that city.",
+  "Mission failed. City not found.",
+  "The GPS is questioning reality.",
+  "That city is probably on another planet.",
+  "Houston, we have a location problem.",
+  "Our satellites are asking, 'Where?'",
+  "The map just said, 'Nope.'",
+  "That doesn't ring any weather bells.",
+  "Looks like your keyboard went on an adventure.",
+  "This city skipped geography class.",
+  "Error 404: Sunshine not found.",
+  "The forecast is... confusion.",
+  "That location has mastered invisibility.",
+  "Did you invent a new city? Impressive.",
+  "We checked every cloud. Nothing there.",
+  "Our weather wizard couldn't cast that spell.",
+  "The forecast elves couldn't locate it.",
+  "Plot twist: That city isn't on the map.",
+  "Even the compass is spinning in circles.",
+  "Looks like the city packed its bags and left.",
+  "You unlocked the secret city... that doesn't exist.",
+  "The weather server blinked twice and gave up.",
+  "No city, no forecast, only mystery.",
+  "That location is beyond our meteorological powers.",
+  "The rain refused to fall there because it couldn't find it.",
+  "Try a different spelling—we promise we're not judging.",
+  "We found lots of clouds, but no city.",
+  "The map is giving us the silent treatment.",
+  "Weather update: 100% chance of typo.",
+  "That city might exist in an alternate universe.",
+  "Even the wind whispered, 'Never heard of it.'",
+  "Our forecast machine is officially confused.",
+  "Oops! That city is off the radar.",
+  "Looks like you've discovered Atlantis... or just a typo.",
+  "The clouds looked everywhere. Still nothing.",
+  "The sun says that city doesn't exist.",
+  "The rain can't fall where it can't find.",
+  "The forecast says: Unknown with a chance of typo.",
+  "The wind blew away your city name.",
+  "Storms know many places. Not this one.",
+  "The rainbow ends somewhere else.",
+  "Lightning couldn't strike that location either.",
+  "Our thermometer is as confused as we are.",
+  "The forecast chickens refused to predict this one.",
+]
+
+function App() {
+  const canvasRef = useRef(null)
+  const stageWrapperRef = useRef(null)
+  const [city, setCity] = useState('')
+  const [weather, setWeather] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [popupScreenPos, setPopupScreenPos] = useState(null)
+  const [popupVisible, setPopupVisible] = useState(false)
+  const [recentSearches, setRecentSearches] = useState([])
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const [placeSuggestions, setPlaceSuggestions] = useState([])
+  const [newsArticles, setNewsArticles] = useState([])
+  const [newsLoading, setNewsLoading] = useState(false)
+  const [now, setNow] = useState(new Date())
+  const [showRadar, setShowRadar] = useState(false)
+  const [showLogin, setShowLogin] = useState(false)
+
+  // --- Auth state ---
+  const [user, setUser] = useState(() => {
+    try {
+      const raw = localStorage.getItem('weatherGlobeUser');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [showAccountMenu, setShowAccountMenu] = useState(false);
+
+  const markerRef = useRef(null)
+  const targetPositionRef = useRef(null)
+  const labelRefs = useRef([])
+  const lastCameraQuatRef = useRef(null)
+
+  function handleLoginSuccess(data) {
+    const loggedInUser = data.user || data; // support either response shape
+    setUser(loggedInUser);
+    try {
+      localStorage.setItem('weatherGlobeUser', JSON.stringify(loggedInUser));
+    } catch {
+      // ignore storage errors
+    }
+    setShowLogin(false);
+  }
+
+  function handleLogout() {
+    setUser(null);
+    setShowAccountMenu(false);
+    try {
+      localStorage.removeItem('weatherGlobeUser');
+    } catch {
+      // ignore storage errors
+    }
+  }
+
+  useEffect(() => {
+    const scene = new THREE.Scene()
+    const wrapper = stageWrapperRef.current
+    const getSize = () => ({
+      width: wrapper.clientWidth,
+      height: wrapper.clientHeight,
+    })
+    const { width: initialWidth, height: initialHeight } = getSize()
+    const camera = new THREE.PerspectiveCamera(75, initialWidth / initialHeight, 0.1, 1000)
+    camera.position.z = 3
+    const renderer = new THREE.WebGLRenderer({ canvas: canvasRef.current, alpha: true })
+    renderer.setClearColor(0x000000, 0)
+    renderer.setPixelRatio(window.devicePixelRatio || 1)
+    renderer.setSize(initialWidth, initialHeight)
+    const controls = new OrbitControls(camera, renderer.domElement)
+    controls.enableDamping = true
+    controls.dampingFactor = 0.15
+    controls.minDistance = 1.5
+    controls.maxDistance = 6
+    controls.enableZoom = false
+    const textureLoader = new THREE.TextureLoader()
+    const texture = textureLoader.load(earthTexture)
+    const geometry = new THREE.SphereGeometry(1, 64, 64)
+    const material = new THREE.MeshStandardMaterial({ map: texture })
+    const globe = new THREE.Mesh(geometry, material)
+    scene.add(globe)
+
+    fetch('https://raw.githubusercontent.com/johan/world.geo.json/master/countries.geo.json')
+      .then(res => res.json())
+      .then(data => {
+        const borderMat = new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.5 })
+        const borderGroup = new THREE.Group()
+        data.features.forEach(feature => {
+          if (!feature.geometry) return;
+          if (feature.geometry.type === 'Polygon') {
+            feature.geometry.coordinates.forEach(coords => {
+              const points = []
+              coords.forEach(([lon, lat]) => {
+                points.push(latLonToVector3(lat, lon, 1.002))
+              })
+              const geo = new THREE.BufferGeometry().setFromPoints(points)
+              borderGroup.add(new THREE.Line(geo, borderMat))
+            })
+          } else if (feature.geometry.type === 'MultiPolygon') {
+            feature.geometry.coordinates.forEach(polygon => {
+              polygon.forEach(coords => {
+                const points = []
+                coords.forEach(([lon, lat]) => {
+                  points.push(latLonToVector3(lat, lon, 1.002))
+                })
+                const geo = new THREE.BufferGeometry().setFromPoints(points)
+                borderGroup.add(new THREE.Line(geo, borderMat))
+              })
+            })
+          }
+        })
+        scene.add(borderGroup)
+      })
+      .catch(err => console.error("Could not load borders:", err))
+
+    const light = new THREE.DirectionalLight(0xffffff, 2)
+    light.position.set(5, 3, 5)
+    scene.add(light)
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.3)
+    scene.add(ambientLight)
+
+    function createMarkerTexture() {
+      const canvas = document.createElement('canvas')
+      canvas.width = 64
+      canvas.height = 64
+      const ctx = canvas.getContext('2d')
+      ctx.beginPath()
+      ctx.arc(32, 32, 28, 0, Math.PI * 2)
+      ctx.fillStyle = '#ffffff'
+      ctx.fill()
+      ctx.beginPath()
+      ctx.arc(32, 32, 20, 0, Math.PI * 2)
+      ctx.fillStyle = '#4285F4'
+      ctx.fill()
+      return new THREE.CanvasTexture(canvas)
+    }
+    const markerTexture = createMarkerTexture()
+    const markerMaterial = new THREE.SpriteMaterial({
+      map: markerTexture,
+      depthTest: true,
+      sizeAttenuation: false,
+    })
+    const marker = new THREE.Sprite(markerMaterial)
+    marker.scale.set(0.03, 0.03, 1)
+    marker.visible = false
+    scene.add(marker)
+    markerRef.current = marker
+
+    function handleResize() {
+      const { width, height } = getSize()
+      camera.aspect = width / height
+      camera.updateProjectionMatrix()
+      renderer.setSize(width, height)
+    }
+    window.addEventListener('resize', handleResize)
+
+    function animate() {
+      requestAnimationFrame(animate)
+      controls.update()
+      if (targetPositionRef.current) {
+        camera.position.lerp(targetPositionRef.current, 0.03)
+        camera.lookAt(0, 0, 0)
+        if (camera.position.distanceTo(targetPositionRef.current) < 0.01) {
+          targetPositionRef.current = null
+        }
+      }
+      let isMoving = false
+      if (lastCameraQuatRef.current) {
+        const angle = lastCameraQuatRef.current.angleTo(camera.quaternion)
+        if (angle > 0.0005) {
+          isMoving = true
+        }
+      }
+      lastCameraQuatRef.current = camera.quaternion.clone()
+      const horizonDot = 1 / camera.position.length()
+      if (marker.visible) {
+        const markerDirection = marker.position.clone().normalize()
+        const cameraDirection = camera.position.clone().normalize()
+        const facingDot = markerDirection.dot(cameraDirection)
+        const isFacingCamera = facingDot > horizonDot
+        if (isFacingCamera) {
+          const vector = marker.position.clone()
+          vector.project(camera)
+          const rect = canvasRef.current.getBoundingClientRect()
+          const x = rect.left + window.scrollX + (vector.x * 0.5 + 0.5) * rect.width
+          const y = rect.top + window.scrollY + (-vector.y * 0.5 + 0.5) * rect.height
+          setPopupScreenPos({ x, y })
+        } else {
+          setPopupScreenPos(null)
+        }
+      }
+      globeLabels.forEach((label, index) => {
+        const el = labelRefs.current[index]
+        if (!el) return
+        const labelPos = latLonToVector3(label.lat, label.lon, 1.01)
+        const labelDirection = labelPos.clone().normalize()
+        const cameraDirectionForLabel = camera.position.clone().normalize()
+        const labelFacingDot = labelDirection.dot(cameraDirectionForLabel)
+        if (!isMoving && labelFacingDot > horizonDot) {
+          const vector = labelPos.clone()
+          vector.project(camera)
+          const rect = canvasRef.current.getBoundingClientRect()
+          const x = (vector.x * 0.5 + 0.5) * rect.width
+          const y = (-vector.y * 0.5 + 0.5) * rect.height
+          el.style.left = `${x}px`
+          el.style.top = `${y}px`
+          el.style.opacity = String(Math.min(1, (labelFacingDot - horizonDot) * 4))
+        } else {
+          el.style.opacity = '0'
+        }
+      })
+      renderer.render(scene, camera)
+    }
+    animate()
+
+    return () => {
+      window.removeEventListener('resize', handleResize)
+      renderer.dispose()
+      controls.dispose()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!city.trim()) {
+      setPlaceSuggestions([])
+      return
+    }
+    const timeoutId = setTimeout(() => {
+      fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(city)}&limit=5`)
+        .then((response) => response.json())
+        .then((data) => {
+          setPlaceSuggestions(data)
+        })
+        .catch(() => {
+          setPlaceSuggestions([])
+        })
+    }, 400)
+    return () => clearTimeout(timeoutId)
+  }, [city])
+
+  const NEWS_CACHE_KEY = 'weatherNewsCache_v1'
+  const NEWS_CACHE_TTL = 5 * 60 * 60 * 1000
+  const newsCacheHours = Math.max(1, Math.floor(NEWS_CACHE_TTL / (60 * 60 * 1000)))
+  const fallbackArticles = [
+    {
+      title: 'Global weather patterns show mixed signals',
+      url: '#',
+      source: { name: 'Fallback Source' },
+    },
+    {
+      title: 'Tips to stay cool during heatwaves',
+      url: '#',
+      source: { name: 'Fallback Source' },
+    },
+    {
+      title: 'How to read satellite weather maps',
+      url: '#',
+      source: { name: 'Fallback Source' },
+    },
+  ]
+
+  useEffect(() => {
+    async function loadNews() {
+      setNewsLoading(true)
+      try {
+        const cachedRaw = localStorage.getItem(NEWS_CACHE_KEY)
+        if (cachedRaw) {
+          const cached = JSON.parse(cachedRaw)
+          if (cached?.ts && Date.now() - cached.ts < NEWS_CACHE_TTL && cached.articles?.length) {
+            setNewsArticles(cached.articles)
+            setNewsLoading(false)
+            return
+          }
+        }
+        const res = await fetch(`${API_URL}/news`)
+        const data = await res.json()
+        if (res.ok && data?.articles?.length) {
+          setNewsArticles(data.articles)
+          try {
+            localStorage.setItem(NEWS_CACHE_KEY, JSON.stringify({ ts: Date.now(), articles: data.articles }))
+          } catch (e) {
+            // ignore localStorage write errors
+          }
+        } else {
+          const cachedRaw2 = localStorage.getItem(NEWS_CACHE_KEY)
+          if (cachedRaw2) {
+            const cached = JSON.parse(cachedRaw2)
+            setNewsArticles(cached.articles || fallbackArticles)
+          } else {
+            setNewsArticles(fallbackArticles)
+          }
+        }
+      } catch (err) {
+        console.error('News fetch failed', err)
+        const cachedRaw3 = localStorage.getItem(NEWS_CACHE_KEY)
+        if (cachedRaw3) {
+          const cached = JSON.parse(cachedRaw3)
+          setNewsArticles(cached.articles || fallbackArticles)
+        } else {
+          setNewsArticles(fallbackArticles)
+        }
+      } finally {
+        setNewsLoading(false)
+      }
+    }
+    loadNews()
+  }, [])
+
+  useEffect(() => {
+    const intervalId = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(intervalId)
+  }, [])
+
+  function goToLocation(lat, lon) {
+    const surfacePoint = latLonToVector3(lat, lon, 1)
+    markerRef.current.position.copy(surfacePoint).multiplyScalar(1.01)
+    markerRef.current.visible = true
+    const cameraDistance = 2.2
+    const cameraTarget = surfacePoint.clone().normalize().multiplyScalar(cameraDistance)
+    targetPositionRef.current = cameraTarget
+  }
+
+  function fetchWeatherForCity(cityName) {
+    setLoading(true)
+    setError(null)
+    setWeather(null)
+    setPopupVisible(false)
+    setShowSuggestions(false)
+    setShowRadar(false)
+    fetch(`${API_URL}/weather/${encodeURIComponent(cityName)}`)
+      .then((response) => {
+        if (!response.ok) throw new Error('City not found')
+        return response.json()
+      })
+      .then((data) => {
+        setWeather(data)
+        setLoading(false)
+        goToLocation(data.lat, data.lon)
+        setPopupVisible(false)
+        setTimeout(() => setPopupVisible(true), 50)
+        setRecentSearches((prev) => {
+          const updated = [cityName, ...prev.filter((c) => c.toLowerCase() !== cityName.toLowerCase())]
+          return updated.slice(0, 5)
+        })
+      })
+      .catch(() => {
+        const randomMessage = funnyMessages[Math.floor(Math.random() * funnyMessages.length)]
+        setError(randomMessage)
+        setLoading(false)
+      })
+  }
+
+  function handleSearch() {
+    if (!city.trim()) return
+    fetchWeatherForCity(city)
+  }
+
+  function toggleWeatherHistory() {
+    setShowRadar((prev) => !prev)
+  }
+
+  const formattedDate = now.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  const formattedTime = now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+
+  return (
+    <div className="app-container">
+      <div className="stars-background">
+        <div className="stars-glow" />
+        <div className="stars-field" />
+      </div>
+      <div className="shooting-stars-layer">
+        <ShootingStars
+          starColor="#9E00FF"
+          trailColor="#2EB9DF"
+          minSpeed={15}
+          maxSpeed={35}
+          minDelay={1000}
+          maxDelay={3000}
+        />
+        <ShootingStars
+          starColor="#FF0099"
+          trailColor="#FFB800"
+          minSpeed={10}
+          maxSpeed={25}
+          minDelay={2000}
+          maxDelay={4000}
+        />
+        <ShootingStars
+          starColor="#00FF9E"
+          trailColor="#00B8FF"
+          minSpeed={20}
+          maxSpeed={40}
+          minDelay={1500}
+          maxDelay={3500}
+        />
+      </div>
+      <div className="main-layout">
+        <div className="globe-stage-wrapper" ref={stageWrapperRef}>
+          <div className={`globe-stage ${showRadar ? 'show-radar' : ''}`}>
+            <div className="globe-layer">
+              <canvas ref={canvasRef} className="globe-canvas" />
+              <div className="globe-labels-layer">
+                {globeLabels.map((label, index) => (
+                  <span
+                    key={label.name}
+                    ref={(el) => (labelRefs.current[index] = el)}
+                    className="globe-place-label"
+                  >
+                    {label.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div className="radar-layer">
+              {weather && (
+                <WeatherRadarView
+                  lat={weather.lat}
+                  lon={weather.lon}
+                  active={showRadar}
+                  onClose={() => setShowRadar(false)}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+        <aside className="sidebar">
+          {user ? (
+            <div className="account-menu-wrapper">
+              <button
+                className="account-trigger-btn"
+                onClick={() => setShowAccountMenu((v) => !v)}
+              >
+                <span className="account-avatar">
+                  {user.name?.[0]?.toUpperCase() || 'U'}
+                </span>
+                <span className="account-name">{user.name}</span>
+              </button>
+              {showAccountMenu && (
+                <div className="account-dropdown">
+                  <p className="account-email">{user.email}</p>
+                  <button className="account-logout-btn" onClick={handleLogout}>
+                    Log out
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <button className="login-trigger-btn" onClick={() => setShowLogin(true)}>
+              Log In
+            </button>
+          )}
+          <div className="news-panel">
+            <h3>World Weather News</h3>
+            <div className="news-list">
+              {newsLoading ? (
+                <div className="news-item news-placeholder">
+                  <p className="news-title">Loading news…</p>
+                  <p className="news-source">Updating once every {newsCacheHours} hours</p>
+                </div>
+              ) : newsArticles && newsArticles.length > 0 ? (
+                newsArticles.map((article, i) => (
+                  <a
+                    key={i}
+                    href={article.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="news-item"
+                  >
+                    <p className="news-title">{article.title}</p>
+                    <p className="news-source">{article.source?.name || article.source}</p>
+                  </a>
+                ))
+              ) : (
+                <div className="news-item news-placeholder">
+                  <p className="news-title">No weather news available right now.</p>
+                  <p className="news-source">Try refreshing or check your API.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </aside>
+      </div>
+      <div className="secondary-layout">
+        <div className="side-panels-column">
+          <SidePanels weather={weather} />
+        </div>
+        {weather && (
+          <div className="forecast-section">
+            <h3 className="forecast-section-title">5 Days Weather — {weather.city}</h3>
+            <WeatherForecastPanel cityName={weather.city} />
+            <WeatherExtrasPanel lat={weather.lat} lon={weather.lon} city={weather.city} />
+          </div>
+        )}
+        <div className="places-column">
+          <PlacesPanel />
+        </div>
+      </div>
+      <div className="search-wrapper">
+        <div className="search-top-row">
+          <div className="search-bar">
+            <div className="search-input-wrapper">
+              <svg className="search-input-icon" width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
+                <line x1="16.5" y1="16.5" x2="21" y2="21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+              <input
+                type="text"
+                value={city}
+                onChange={(e) => {
+                  setCity(e.target.value)
+                  setShowSuggestions(true)
+                }}
+                onFocus={() => setShowSuggestions(true)}
+                onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleSearch()
+                }}
+                placeholder="Search city..."
+              />
+            </div>
+            <button onClick={handleSearch}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
+                <line x1="16.5" y1="16.5" x2="21" y2="21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+            </button>
+          </div>
+          <button
+            className={`weather-history-btn ${showRadar ? 'active' : ''}`}
+            disabled={!weather}
+            onClick={toggleWeatherHistory}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 7v5l3 2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            WEATHER RADAR
+          </button>
+        </div>
+        {showSuggestions && placeSuggestions.length > 0 && (
+          <div className="suggestions-dropdown">
+            {placeSuggestions.map((place) => (
+              <div
+                key={place.place_id}
+                className="suggestion-item"
+                onMouseDown={() => {
+                  const shortName = place.display_name.split(',')[0]
+                  setCity(shortName)
+                  fetchWeatherForCity(shortName)
+                }}
+              >
+                <span className="pin-icon">📍</span>
+                <span className="suggestion-text">{place.display_name}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {(loading || error) && (
+        <div
+          className="status-popup"
+          style={
+            canvasRef.current
+              ? {
+                left: canvasRef.current.getBoundingClientRect().left + window.scrollX + canvasRef.current.offsetWidth / 2,
+                top: canvasRef.current.getBoundingClientRect().top + window.scrollY + canvasRef.current.offsetHeight / 2,
+              }
+              : {}
+          }
+        >
+          {loading && <p>Loading...</p>}
+          {error && <p className="error-text">{error}</p>}
+        </div>
+      )}
+      {weather && popupScreenPos && !showRadar && (
+        <div
+          className={`weather-popup ${popupVisible ? 'popup-visible' : ''}`}
+          style={{
+            left: popupScreenPos.x + 20,
+            top: popupScreenPos.y - 60,
+          }}
+        >
+          <div className="popup-datetime">
+            {formatCityDateTime(weather.timezone)}
+          </div>
+          <h2>{weather.city}</h2>
+          <p>{weather.temperature}°C (feels like {weather.feels_like}°C)</p>
+          <p>{weather.description}</p>
+          <p>Humidity: {weather.humidity}%</p>
+          <p>Wind: {weather.wind_speed} m/s</p>
+        </div>
+      )}
+      {showLogin && (
+        <div className="login-modal-overlay" onClick={() => setShowLogin(false)}>
+          <div className="login-modal-content" onClick={(e) => e.stopPropagation()}>
+            <button className="login-modal-close" onClick={() => setShowLogin(false)}>×</button>
+            <LoginPage onLoginSuccess={handleLoginSuccess} />
+          </div>
+        </div>
+      )}
+      <Footer />
+      <AIChatBox city={weather?.city} weather={weather} />
+    </div>
+  )
+}
+
+export default App
