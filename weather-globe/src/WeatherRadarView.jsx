@@ -27,12 +27,15 @@ function WeatherRadarView({ lat, lon, active, onClose }) {
       center: [lat, lon],
       zoom: 6,
       zoomControl: true,
-      attributionControl: false,
+      attributionControl: true,
     })
-    const base = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      subdomains: 'abcd',
-      maxZoom: 12,
-    }).addTo(map)
+    const base = L.tileLayer(
+      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      {
+       maxZoom: 19,
+       attribution: '&copy; OpenStreetMap contributors',
+      }
+    ).addTo(map)
     layersRef.current.base = base
     mapInstanceRef.current = map
     setMapReady(true)
