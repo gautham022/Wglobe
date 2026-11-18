@@ -379,7 +379,9 @@ body {
   z-index: 5;
   width: 100%;
   max-width: 650px;
-  margin: 0 0 0 300px;
+  margin: 0;
+  justify-self: center;
+  min-width: 0;
   color: white;
   grid-column: 2;
 }
