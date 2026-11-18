@@ -17,10 +17,11 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
+       allow_origins=[
         "https://weather-globe-six.vercel.app",
         "https://weather-globe-4k4pgji1s-gautham23.vercel.app",
         "http://localhost:5173",
+        "https://wglobe-j5zd.vercel.app",
     ],
     allow_methods=["*"],
     allow_headers=["*"],
