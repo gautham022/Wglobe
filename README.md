@@ -43,24 +43,6 @@ Full feature & deployment guide: [FEATURES.md](FEATURES.md)
 | `frontend/` | React + Vite + Three.js app (deployed on Vercel) |
 | `weather-api-project/` | FastAPI backend (deployed on Railway) |
 
-## Run locally
-
-**Frontend**
-```bash
-cd frontend
-npm install
-npm run dev        # → http://localhost:5173
-```
-The frontend talks to the production backend out of the box (`src/config.js`).
-
-**Backend**
-```bash
-cd weather-api-project
-pip install -r requirements.txt
-copy .env.example .env        # fill in your keys
-uvicorn main:app --reload --port 8000
-```
-
 ## Environment variables (backend, via `.env` or Railway dashboard)
 
 | Variable | Used for | Required |
